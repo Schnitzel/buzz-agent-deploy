@@ -1,0 +1,35 @@
+# systemd USER service for a native buzz agent.
+# Install at ~/.config/systemd/user/buzz-acp.service for the account that runs
+# the agent, then:
+#   loginctl enable-linger <user>          # so it runs without an active login
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now buzz-acp.service
+#
+# Replace the CAPITALISED paths. This assumes opencode is already installed for
+# this user (native), so the agent shares that user's session db, config and
+# model credentials — see references/native-deploy.md.
+
+[Unit]
+Description=buzz agent (buzz-acp -> opencode acp)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# Run in the repo you want the agent working in. opencode auto-loads AGENTS.md
+# from here every session, so this is also where its house rules come from.
+WorkingDirectory=/home/AGENTUSER/PROJECT
+EnvironmentFile=/home/AGENTUSER/buzz-agent/buzz-acp.env
+Environment=HOME=/home/AGENTUSER
+# PATH MUST include the buzz CLI and opencode. Without `buzz` on PATH the agent
+# connects and thinks but cannot reply — the harness expects it to post with the
+# buzz CLI.
+Environment=PATH=/home/AGENTUSER/.local/bin:/home/AGENTUSER/.opencode/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/AGENTUSER/.local/bin/buzz-acp
+Restart=always
+RestartSec=5
+# Firmware/large-repo analysis can be heavy; give opencode room but keep a cap.
+MemoryMax=48G
+
+[Install]
+WantedBy=default.target

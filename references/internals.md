@@ -13,6 +13,7 @@ or before concluding that something is a buzz bug.
 - [Publishing rules](#publishing-rules)
 - [Replaceable events that overwrite each other](#replaceable-events-that-overwrite-each-other)
 - [The sprig image](#the-sprig-image)
+- [Replying: the buzz CLI and virtual membership](#replying-the-buzz-cli-and-virtual-membership)
 - [Diagnosing by log level](#diagnosing-by-log-level)
 
 ## Event kinds that matter
@@ -233,6 +234,28 @@ helper to `BUZZ_RELAY_URL` and then `exec buzz-acp "$@"`. Keep it.
 
 It ships no agent CLIs. opencode's musl build (`opencode-linux-x64-musl`) still
 needs `libstdc++` and `libgcc`.
+
+## Replying: the buzz CLI and virtual membership
+
+The harness receives events and prompts the agent, but has **no built-in way to
+post**. The agent replies by running `buzz messages send …` from its shell tool
+(the README calls this "the Buzz CLI that the harness configures automatically").
+Consequences for any non-sprig deploy:
+
+- `buzz` must be on the **agent subprocess's** PATH. opencode inherits the
+  harness process env, so on a systemd native install that means the unit's
+  `Environment=PATH=` must include the CLI's directory. Missing it = the bot
+  connects, thinks, and never speaks.
+- The CLI authenticates from `BUZZ_PRIVATE_KEY` + `BUZZ_RELAY_URL`, inherited
+  from the harness env. A **virtual member** (admitted by NIP-AA, never
+  enrolled) additionally needs `BUZZ_AUTH_TAG` in the env, or every REST call is
+  `403 relay_membership_required` — the same asymmetry as the HTTP publisher's
+  `x-auth-tag` header. `wss://` is accepted by the CLI once the tag is present.
+- `opencode run "…post via buzz…"` will auto-reject if `opencode.json` gates
+  `buzz messages send` with `"ask"` and nothing answers. This is NOT how the bot
+  runs: the harness spawns `opencode acp` with `permission_mode=bypassPermissions`,
+  which those gates do not apply to. Use it only as a negative control, not a
+  reply-path test.
 
 ## Diagnosing by log level
 

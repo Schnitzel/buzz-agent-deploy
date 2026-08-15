@@ -76,16 +76,36 @@ its key — afterwards nothing can sign as it. Archiving hides it from pickers a
 autocomplete while preserving history, which is the designed behaviour; deleting
 its events destroys history the spec says to keep.
 
+**The agent replies via the `buzz` CLI, which the harness does not provide.** It
+expects the agent to run `buzz messages send`. The CLI must be on the agent's
+PATH, and a virtual member must have `BUZZ_AUTH_TAG` in its environment or every
+CLI call is `403 relay_membership_required`. Miss either and the bot connects,
+thinks, and stays silent.
+
+## Two deployment shapes
+
+- **Docker** — blank VM. The image bundles everything (`assets/Dockerfile` +
+  `docker-compose.yml`).
+- **Native** — the host already runs opencode (a workstation, or a box driving
+  it through OpenChamber/the TUI). Run `buzz-acp` as a systemd user service
+  beside the existing opencode so the bot **shares its session store, config and
+  model credentials** — it can then read every existing session with
+  `opencode export`. Build `buzz-acp` and the `buzz` CLI from source (the sprig
+  binaries are musl, won't run on glibc). See `references/native-deploy.md`.
+
 ## Layout
 
 ```
 SKILL.md                    the procedure, as a Claude Code skill
 references/internals.md     why each rule exists, with upstream source refs
+references/native-deploy.md systemd, shared opencode, build-from-source
 assets/Dockerfile           sprig base + opencode musl
 assets/docker-compose.yml   Host-header wiring, resource caps
 assets/env.example          every variable, with the silent failures marked
+assets/buzz-acp.service     systemd user unit for the native path
+assets/buzz-acp.env.example env for the native path (BUZZ_ACP_MODEL, auth tag)
 scripts/nostr.py            BIP-340 + NIP-01 + NIP-98, stdlib only
-scripts/owner-setup.py      owner-signed: attestation, 30177, role=bot, archive
+scripts/owner-setup.py      owner-signed: attestation, 30177, role=bot, channels, archive
 scripts/agent-profile.py    agent-signed: kind 0 profile, kind 10100 directory
 ```
 

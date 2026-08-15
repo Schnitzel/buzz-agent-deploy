@@ -21,8 +21,15 @@ USAGE
         --relay https://buzz.example.org \
         --agent <agent-pubkey-hex> \
         --name my-agent \
-        --channel general=<uuid> --channel ops=<uuid> \
+        --create-channel team-a --create-channel team-b
+        --channel general=<uuid>
         [--dry-run]
+
+    --create-channel NAME  makes a new PRIVATE channel you own and seats the bot.
+    --channel NAME=UUID     seats the bot in an EXISTING channel.
+
+    # retire it (BEFORE destroying its key):
+    python3 owner-setup.py --relay ... --agent <pubkey> --archive
 
 Your key is typed at a hidden prompt — never an argument, so it stays out of
 shell history — used in memory, and never printed. The `auth` tag is printed
@@ -38,6 +45,7 @@ import hashlib
 import json
 import os
 import sys
+import uuid
 from getpass import getpass
 from pathlib import Path
 
@@ -102,7 +110,14 @@ def main():
         action="append",
         default=[],
         metavar="NAME=UUID",
-        help="channel to seat the agent in as a bot; repeatable",
+        help="seat the agent as a bot in an EXISTING channel; repeatable",
+    )
+    ap.add_argument(
+        "--create-channel",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="create a NEW private channel you own and seat the agent in it; repeatable",
     )
     ap.add_argument("--parallelism", type=int, default=1)
     # NIP-AP: kind 30177 is the per-instance record. A "definition-less"
@@ -192,25 +207,42 @@ def main():
     # The content body is public and unencrypted. NIP-AP: it MUST NOT carry
     # secrets, and env_vars MUST NOT appear. Nothing here should ever hold one.
     assert "env_vars" not in record
+
+    # --create-channel makes a NEW private channel the OWNER owns (kind 9007),
+    # then --channel seats the bot in an existing one. Created channels are
+    # auto-seated. The owner owns them, so nobody else can read them — which is
+    # the point of "private". The generated name→uuid map is printed at the end
+    # for the agent's kind 10100 profile.
+    created = []  # (name, uuid)
+    for name in args.create_channel:
+        created.append((name, str(uuid.uuid4())))
+
     events = [
         (
             "kind 30177  managed-agent record (Agents panel)",
             build_event(sk, KIND_MANAGED_AGENT, [["d", args.agent]], json.dumps(record)),
         )
     ]
-    for spec in args.channel:
-        name, _, cid = spec.partition("=")
+    for name, cid in created:
+        events.append((
+            f"kind 9007   create PRIVATE channel #{name}",
+            build_event(sk, 9007, [
+                ["h", cid], ["name", name],
+                ["visibility", "private"], ["channel_type", "stream"],
+            ], ""),
+        ))
+    # Seat the bot: in freshly created channels, and in any explicit --channel.
+    seat = [(n, c) for n, c in created] + [
+        (s.partition("=")[0], s.partition("=")[2]) for s in args.channel
+    ]
+    for name, cid in seat:
         if not cid:
-            ap.error(f"--channel wants NAME=UUID, got {spec!r}")
-        events.append(
-            (
-                f"kind 9000   seat as bot in #{name}",
-                build_event(
-                    sk, KIND_PUT_USER,
-                    [["h", cid.strip()], ["p", args.agent], ["role", "bot"]], "",
-                ),
-            )
-        )
+            ap.error(f"--channel wants NAME=UUID, got {name!r}")
+        events.append((
+            f"kind 9000   seat as bot in #{name}",
+            build_event(sk, KIND_PUT_USER,
+                        [["h", cid.strip()], ["p", args.agent], ["role", "bot"]], ""),
+        ))
 
     print("BUZZ_AUTH_TAG (public — give this to the agent):\n")
     print(json.dumps(auth_tag))
@@ -233,6 +265,9 @@ def main():
         print(f"\n{failures} of {len(events)} failed.")
         print("A private channel needs the OWNER or an admin — self-add is refused there.")
         return 1
+    if created:
+        print("\nChannels created — the map for agent-profile.py (BUZZ_AGENT_CHANNELS):")
+        print("  " + ",".join(f"{n}={c}" for n, c in created))
     print("\nDone. Now run agent-profile.py as the AGENT, then restart Buzz Desktop.")
     return 0
 

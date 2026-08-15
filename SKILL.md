@@ -154,11 +154,24 @@ Simpler to reason about, but it is a second thing to remember to revoke.
 > instead has the owner sign once on their own machine and ship only the
 > resulting signature, which is public by design.
 
-### 2. Build the image
+### 2. Build the image — OR go native
 
-Copy `assets/Dockerfile`, `assets/docker-compose.yml`, `assets/env.example` and
-`assets/opencode.json` next to each other and edit them. Read the comments —
-each marks a real failure someone has hit.
+**Two deployment shapes. Pick by what the host already is.**
+
+- **Docker** (this section) — the host is a blank VM. Self-contained, isolated,
+  the image bundles everything.
+- **Native** (`references/native-deploy.md`) — the host **already runs opencode**
+  (a workstation, or a box driving opencode through OpenChamber/the TUI). Docker
+  would bundle a *second* opencode with a *separate* session store and lose the
+  whole point; run `buzz-acp` native beside the existing opencode so the bot
+  shares its sessions, config, and model credentials. Build `buzz-acp` **and the
+  `buzz` CLI** from source (the sprig binaries are musl and won't run on glibc),
+  run as a systemd user service. If that's your host, switch to that reference
+  now — the rest of this section is Docker-specific.
+
+For Docker: copy `assets/Dockerfile`, `assets/docker-compose.yml`,
+`assets/env.example` and `assets/opencode.json` next to each other and edit them.
+Read the comments — each marks a real failure someone has hit.
 
 Base on `ghcr.io/block/buzz-sprig`, pinned by digest. It carries `buzz-acp` and
 the `buzz` CLI as symlinks to one binary, so they cannot drift. Building buzz
@@ -166,6 +179,15 @@ from source on a small VM takes the best part of an hour and buys nothing.
 
 Add only the tools the agent genuinely needs. Every package is capability handed
 to something that acts on chat messages.
+
+**The agent replies via the `buzz` CLI — it must be on the agent's PATH.** The
+harness has no built-in post mechanism; it expects the agent to run
+`buzz messages send …`. The sprig image already has it. On a native install you
+must build and install it too, and put it on the systemd service's PATH — miss
+this and the bot connects, thinks, and stays mute. A **virtual member** must also
+have `BUZZ_AUTH_TAG` in the agent's environment, or every CLI call returns
+`403 relay_membership_required` (same reason the HTTP publisher needs
+`x-auth-tag`).
 
 ### 3. Point it at the relay — the Host-header trap
 
@@ -319,12 +341,16 @@ costs an hour every time.
 | Not in `@` autocomplete | Missing kind 10100 with `channel_ids`, or not seated `role=bot` |
 | Not in the Agents panel | Missing kind 30177 |
 | No "managed by" badge | Missing NIP-OA `auth` tag, or a kind 0 published without it |
-| Wrong model in the banner | `OPENCODE_MODEL` ignored — use a config file |
+| Wrong model in the banner | `OPENCODE_MODEL` ignored — use a config file, or `BUZZ_ACP_MODEL` |
+| Connects and thinks but never posts | no `buzz` CLI on the agent's PATH |
+| CLI `403 relay_membership_required` | virtual member without `BUZZ_AUTH_TAG` in the env |
+| `opencode run` auto-rejects a `buzz` post | `opencode.json` "ask" gate; the harness bypasses it, `opencode run` does not |
 | `__cxa_guard_acquire: symbol not found` | Alpine lacks `libstdc++`/`libgcc` |
 | Ansible: `DEFAULT_LOCAL_TMP: Permission denied` | Root-owned `/home/agent` dotfiles |
 
 More depth, including the exact upstream source references behind each of these:
-`references/internals.md`.
+`references/internals.md`. For running native (systemd, shared opencode, build
+from source): `references/native-deploy.md`.
 
 ## Retiring an agent — order matters
 

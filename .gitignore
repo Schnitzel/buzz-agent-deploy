@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*.skill
+.DS_Store
+# Never commit a live deployment's config or keys.
+.env
+key.txt
+pub.txt
+workspace/

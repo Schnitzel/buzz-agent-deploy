@@ -1,0 +1,57 @@
+# A buzz agent. Replace the CAPITALISED values.
+#
+# Reaching the relay is the part that surprises people. A buzz relay routes on
+# the Host header, so the obvious container address `ws://relay:3000` answers
+# 404 to the WebSocket upgrade — the Host is then `relay:3000`, matching no
+# configured domain. A Host WITH a port does not match either, so there is no
+# internal shortcut: the connection must carry the real hostname.
+#
+#   Relay on ANOTHER host      → BUZZ_RELAY_URL=wss://buzz.example.org, no extra_hosts
+#   Relay on the SAME host     → keep the public URL and pin it to host-gateway,
+#                                as below, so traffic crosses the bridge to your
+#                                TLS terminator and no further. (A cloud VM
+#                                usually cannot reach its own public IP from
+#                                inside, so plain DNS would fail.)
+
+name: buzz-agent
+
+services:
+  agent:
+    image: my-buzz-agent:local
+    build:
+      context: .
+      args:
+        SPRIG_IMAGE: ghcr.io/block/buzz-sprig@sha256:REPLACE_WITH_PINNED_DIGEST
+        OPENCODE_VERSION: "1.18.18"
+    env_file:
+      - .env
+
+    extra_hosts:
+      - "buzz.example.org:host-gateway"   # only when the relay is on this host
+
+    volumes:
+      # The agent's working directory. Read-write — it is expected to edit and
+      # commit. Whatever you mount here, it can read: mount deliberately.
+      - ./workspace:/workspace
+      - ./opencode.json:/etc/buzz-agent/opencode.json:ro
+      # Named volume so opencode's session history survives an image rebuild.
+      - agent-home:/home/agent
+
+    # No ports. The agent dials out; nothing dials in. It is not reachable from
+    # the internet even indirectly.
+
+    # An agent that decides to grep the whole disk should hit a wall rather than
+    # take the rest of the host down with it.
+    mem_limit: 1500m
+    cpus: 1.0
+    pids_limit: 512
+
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+volumes:
+  agent-home:

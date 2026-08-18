@@ -9,6 +9,7 @@ or before concluding that something is a buzz bug.
 - [Event kinds that matter](#event-kinds-that-matter)
 - [How autocomplete actually decides](#how-autocomplete-actually-decides)
 - [The author gate, and why DMs differ](#the-author-gate-and-why-dms-differ)
+- [NIP-AO observer frames, and the empty activity tab](#nip-ao-observer-frames-and-the-empty-activity-tab)
 - [NIP-OA owner attestation](#nip-oa-owner-attestation)
 - [Publishing rules](#publishing-rules)
 - [Replaceable events that overwrite each other](#replaceable-events-that-overwrite-each-other)
@@ -88,6 +89,27 @@ Requires `BUZZ_ALLOW_NIP_OA_AUTH=true`, plus
 active member. Virtual members are explicitly *not* active members themselves,
 so they cannot in turn vouch for anyone.
 
+**Admission also decides whether the relay ever learns who owns the agent**, and
+this is not documented anywhere. `check_relay_membership`
+(`crates/buzz-relay/src/api/mod.rs`) short-circuits:
+
+```rust
+if is_member { return Ok(MembershipDecision::Member); }   // → Ok(None), no owner
+```
+
+The owner is returned only on the `ViaOwner` branch — reached solely by agents
+that are *not* members. `handlers/auth.rs` then feeds it to
+`materialize_nip_oa_owner`, which writes `users.agent_owner_pubkey`. The other
+backfill path is gated on `!require_relay_membership`.
+
+So on a closed relay an **enrolled** agent presents a valid `auth` tag that is
+never parsed, and its owner column stays NULL forever. There is no `buzz-admin`
+command to set it. That column gates NIP-AO observer frames (below) and carries
+owner authority over the agent's channel membership and git pushes. Fixed in
+[block/buzz#6098](https://github.com/block/buzz/pull/6098) by resolving the
+owner for direct members too; before that, enrolment and virtual membership are
+*not* interchangeable.
+
 ## How autocomplete actually decides
 
 Source: `desktop/src/features/agents/lib/agentAutocompleteEligibility.ts`.
@@ -126,6 +148,55 @@ the other makes it eligible.
 kind 0 profile and then "best-effort publishes a NIP-29 `kind:9000` self-add
 with `role=bot`. That channel membership is what makes the bot show up in the
 members list and in Buzz's mention autocomplete."
+
+## NIP-AO observer frames, and the empty activity tab
+
+Buzz Desktop's per-agent **ACP activity** tab is fed by **kind 24200** observer
+frames. Two independent gates, both off by default for a hand-provisioned agent.
+
+**Publish side.** `buzz-acp` only emits them with `--relay-observer` /
+`BUZZ_ACP_RELAY_OBSERVER`. Startup logs `relay observer enabled` when it is on.
+
+**Accept side.** `handle_agent_observer_event`
+(`crates/buzz-relay/src/handlers/event.rs`) verifies the signature, enforces a
+±5-minute freshness window, then resolves the frame's route and checks
+ownership — the connection's NIP-OA-authenticated owner if there is one,
+otherwise `db.is_agent_owner`, which reads `users.agent_owner_pubkey`:
+
+```sql
+SELECT agent_owner_pubkey = $3 FROM users
+WHERE community_id = $1 AND pubkey = $2 AND agent_owner_pubkey IS NOT NULL
+```
+
+`fetch_optional` → `unwrap_or(false)`, so a NULL owner is a rejection:
+
+```
+restricted: observer frame is not authorized for this agent owner
+```
+
+Telemetry is then rate-limited to 100/sec per agent; `control` frames
+(owner → agent) bypass the limiter. Accepted frames are published to the global
+ephemeral topic and fanned out — never stored.
+
+**Why it is so hard to diagnose:** the rejection only increments
+`buzz_events_rejected_total{reason="auth"}`. The relay logs nothing, and
+`buzz-acp` does not surface the `OK=false` — it parks failed observer frames for
+redelivery, so a rejected frame looks like a transport hiccup, not a refusal.
+The agent reports `relay observer enabled` and a resolved owner throughout.
+
+The result caches in `observer_owner_cache` for 5 minutes on an **absolute** TTL
+(not idle), so a newly-written mapping takes effect within 5 minutes under
+continuous traffic, with no relay restart.
+
+Two properties that look like faults:
+
+- **Ephemeral.** Kind 24200 is in the 20000–29999 range, which NIP-01 says
+  relays MUST NOT persist. The tab is a live window; an idle agent correctly
+  shows nothing. Open it *before* prompting the agent.
+- **Owner-only.** Frames are NIP-44 encrypted with `(agent_privkey,
+  owner_pubkey)` and `p`-tagged to the owner; the relay gates subscription on
+  that cleartext `p` tag. Allowlisted people can mention the agent and still
+  cannot watch it.
 
 ## The author gate, and why DMs differ
 

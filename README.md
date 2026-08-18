@@ -28,6 +28,7 @@ missing. Symptoms that all mean "a different one of the five":
 | Shows "owner unavailable" | NIP-OA owner attestation |
 | `discovered 0 channel(s) — agent will sit idle` | relay member, but not a channel member |
 | `404` on the relay WebSocket | the relay routes on the Host header |
+| ACP activity tab permanently empty | `BUZZ_ACP_RELAY_OBSERVER`, and an owner the relay never recorded |
 
 ## Findings you will not find in the docs
 
@@ -50,6 +51,26 @@ controlled comparison:
 
 This contradicts `examples/countdown-bot`'s README, which credits the `role=bot`
 self-add. That claim looks stale for current Buzz Desktop.
+
+**How you admit the agent to the relay decides whether its activity tab works.**
+The two documented routes in — NIP-AA virtual membership, or `buzz-admin
+add-member` — are not interchangeable, and nothing says so. Virtual membership
+makes the relay resolve the agent's NIP-OA owner and write
+`users.agent_owner_pubkey`. Enrolment does not: `check_relay_membership` matches
+direct membership first and returns before the `auth` tag is read, so a valid
+proof is discarded on every connection.
+
+That column is what gates NIP-AO kind 24200 observer frames, so an enrolled
+agent has every frame rejected with `restricted: observer frame is not
+authorized for this agent owner` and its ACP activity tab is empty forever.
+Silently: the relay logs nothing and only increments a counter, buzz-acp never
+surfaces the `OK=false`, and the agent goes on reporting `relay observer
+enabled` with a resolved owner. Enrolling the agent is what breaks it.
+
+Sent upstream as [block/buzz#6098](https://github.com/block/buzz/pull/6098),
+which resolves the owner for direct members too. Until a relay carries that,
+prefer virtual membership — and note the feed is opt-in either way
+(`BUZZ_ACP_RELAY_OBSERVER`), so both gates have to be cleared.
 
 **A DM is gated on the agent's owner, and the allowlist does not substitute.**
 With no `BUZZ_ACP_AGENT_OWNER`, an allowlisted person's channel mentions work
@@ -145,7 +166,9 @@ BUZZ_AGENT_AUTHTAG='["auth",...]' python3 scripts/agent-profile.py
 With the attestation in place the agent needs no explicit relay enrolment at
 all — [NIP-AA](https://github.com/block/buzz/blob/main/docs/nips/NIP-AA.md)
 virtual membership admits it because its owner is a member, and revoking the
-owner cuts off their agents automatically.
+owner cuts off their agents automatically. It is also the route that gets the
+agent's owner recorded relay-side, which its activity tab depends on; enrolling
+it with `add-member` instead skips that. Prefer this.
 
 Retiring it, in this order:
 

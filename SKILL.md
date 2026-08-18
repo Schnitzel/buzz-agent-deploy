@@ -10,8 +10,9 @@ description: >-
   mentionable", or "deploy buzz-acp". Also use it for DEBUGGING an existing
   buzz agent that misbehaves in the specific silent ways these deployments
   fail — the agent ignores DMs but answers in channels, never appears in @
-  autocomplete or the Agents panel, shows no "managed by" badge, sits idle
-  reporting "discovered 0 channel(s)", or 404s on the relay WebSocket. Reach
+  autocomplete or the Agents panel, shows no "managed by" badge, has a
+  permanently empty ACP activity tab, sits idle reporting "discovered 0
+  channel(s)", or 404s on the relay WebSocket. Reach
   for it even if the user only describes the symptom and never says "buzz
   agent".
 ---
@@ -44,7 +45,8 @@ it publishes the bare minimum to speak in one channel. Treat it as the floor.
 | kind 9000 `role=bot` per channel | NIP-29 | owner, or self in open channels | optional; members-list presentation |
 | Channel membership (any role) | NIP-29 | self in open channels | yes, or it sees nothing |
 | kind 30174 engrams (memory) | **NIP-AE** | agent | handled by buzz-acp |
-| Turn metrics / observability | NIP-AM, NIP-AO | agent | handled by buzz-acp |
+| Turn metrics | NIP-AM | agent | handled by buzz-acp |
+| **Live activity feed** | **NIP-AO** | agent | **opt-in, and gated twice** — see [The activity tab](#the-activity-tab-and-the-two-gates-behind-it) |
 | `BUZZ_ACP_AGENT_OWNER` | — | — | yes, or **every DM is dropped** |
 
 The harness already covers the agent-side protocol — memory, metrics,
@@ -145,7 +147,19 @@ Requires `BUZZ_ALLOW_NIP_OA_AUTH=true` and, on a closed relay,
 skip `add-member` entirely.
 
 **Explicit membership.** `buzz-admin add-member --pubkey <agent-pubkey-hex>`.
-Simpler to reason about, but it is a second thing to remember to revoke.
+Simpler to reason about, and it costs more than it looks.
+
+It is a second thing to remember to revoke — and, on a relay without
+[block/buzz#6098](https://github.com/block/buzz/pull/6098), it also **silently
+disables the agent's activity feed**. `check_relay_membership` tests direct
+membership first and returns before it ever parses the `auth` tag, so the
+agent's owner is never recorded in `users.agent_owner_pubkey`. The relay gates
+NIP-AO observer frames on exactly that column and rejects every one of them.
+Enrolling the agent is what breaks it; the virtual-membership path records the
+owner as a side effect of admitting it. See
+[The activity tab](#the-activity-tab-and-the-two-gates-behind-it).
+
+Prefer virtual membership unless something forces your hand.
 
 > countdown-bot's README calls these "standalone bot identity" and
 > "owner-attested bot identity". It generates the attestation in-process from
@@ -277,6 +291,14 @@ un-mentions the agent. Republishing makes the damage self-repairing.
 
 Restart Buzz Desktop afterwards; it caches the directory.
 
+> Publishing 10100 out-of-band like this is a workaround for `buzz-acp` never
+> writing it — the one event that decides mentionability is the one the harness
+> does not publish, even though it already subscribes to membership
+> notifications and knows its own channel set.
+> [block/buzz#6097](https://github.com/block/buzz/pull/6097) has the harness
+> publish and refresh its own entry. If your `buzz-acp` carries that, this step
+> and its every-deploy discipline become unnecessary; without it, keep both.
+
 ## Channels: joining versus being seated
 
 Two different things, and conflating them wastes hours.
@@ -305,6 +327,73 @@ event without the required `p` tag and fails `invalid: missing p tag`. Use
 
 **Add every new channel to `BUZZ_AGENT_CHANNELS` and re-run `agent-profile.py`,**
 or the agent will be a member nobody can mention.
+
+## The activity tab, and the two gates behind it
+
+Buzz Desktop shows a per-agent **ACP activity** tab. For a hand-provisioned
+agent it is empty, and it stays empty through every obvious fix, because two
+independent things must both be true and neither is on by default.
+
+**1. The harness must publish.** NIP-AO telemetry is opt-in:
+
+```
+--relay-observer    Publish encrypted ACP observer frames over the relay
+                    [env: BUZZ_ACP_RELAY_OBSERVER=]
+```
+
+Off unless you set it. The table above lists NIP-AO as "handled by buzz-acp" in
+the sense that you do not implement it — not in the sense that it runs.
+
+**2. The relay must accept.** It gates kind 24200 on `users.agent_owner_pubkey`
+and rejects every frame from an agent with no owner recorded there:
+
+```
+restricted: observer frame is not authorized for this agent owner
+```
+
+An agent admitted by NIP-OA virtual membership gets that column populated as a
+side effect of being admitted. An agent enrolled with `add-member` does not:
+`check_relay_membership` matches direct membership first and returns before the
+`auth` tag is read, so the proof it presented is discarded on every connection.
+Fixed upstream in [block/buzz#6098](https://github.com/block/buzz/pull/6098);
+until that is in your relay, an enrolled agent has no working activity feed.
+
+**The failure is silent at every layer.** The relay logs nothing — it only
+increments `buzz_events_rejected_total{reason="auth"}`. buzz-acp never surfaces
+the `OK=false`. So the agent logs `relay observer enabled`, reports a resolved
+owner, and looks perfectly healthy while every frame it sends is dropped.
+
+Two more properties that read as faults but are not:
+
+- **It is live, not a log.** Kind 24200 is in the ephemeral range and NIP-01
+  says relays MUST NOT persist those events. Nothing replays. An idle agent
+  correctly shows nothing. To see anything, open the tab *first*, then prompt
+  the agent and watch.
+- **Only the owner can read it.** Frames are NIP-44 encrypted with
+  `(agent_privkey, owner_pubkey)` and `p`-tagged to the owner. People who may
+  mention the agent still cannot watch it work. The channel is bidirectional —
+  it also carries `control` frames owner → agent.
+
+If the tab is empty on a working agent, these two only prove it is *sending*:
+
+```bash
+docker exec <agent-container> sh -c 'env | grep OBSERVER'   # expect =true
+docker logs <agent-container> | grep -i observer            # "relay observer enabled"
+```
+
+The check that separates the two failures is whether the relay will accept:
+
+```bash
+docker exec <relay-postgres> psql -U buzz -d buzz -tAc \
+  "SELECT coalesce(encode(agent_owner_pubkey,'hex'),'NO OWNER — frames rejected')
+   FROM users WHERE encode(pubkey,'hex')='<agent-pubkey-hex>'"
+```
+
+`NO OWNER` means gate 2. There is no `buzz-admin` command for it; the mapping is
+written by the relay when it admits an agent that proves an owner. Reconnecting
+the agent on a relay carrying #6098 writes it. Otherwise it is one `UPDATE`,
+matching what `buzz-db`'s `set_agent_owner` does (`IS NULL`-guarded, since the
+column is first-write-wins).
 
 ## Verifying, in the order that isolates fastest
 
@@ -341,6 +430,8 @@ costs an hour every time.
 | Not in `@` autocomplete | Missing kind 10100 with `channel_ids`, or not seated `role=bot` |
 | Not in the Agents panel | Missing kind 30177 |
 | No "managed by" badge | Missing NIP-OA `auth` tag, or a kind 0 published without it |
+| ACP activity tab empty | `BUZZ_ACP_RELAY_OBSERVER` unset — or set, and the relay has no owner recorded for the agent |
+| Activity tab empty only for a teammate | Correct: frames are encrypted to the owner alone |
 | Wrong model in the banner | `OPENCODE_MODEL` ignored — use a config file, or `BUZZ_ACP_MODEL` |
 | Connects and thinks but never posts | no `buzz` CLI on the agent's PATH |
 | CLI `403 relay_membership_required` | virtual member without `BUZZ_AUTH_TAG` in the env |

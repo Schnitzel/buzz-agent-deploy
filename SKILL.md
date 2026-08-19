@@ -285,6 +285,14 @@ BUZZ_AGENT_AUTHTAG='["auth",...]' \
 python3 scripts/agent-profile.py
 ```
 
+`BUZZ_AGENT_ADD_POLICY` (`anyone` by default, or `owner_only` / `nobody`) sets
+who may add the agent to a channel. The relay **requires** this field in the
+entry — `handle_agent_profile` errors without it and logs `Side effect failed:
+kind:10100 missing channel_add_policy field` — but still answers the publisher
+`accepted: true`, so omitting it looks like a clean publish while the policy is
+never applied. Republished every time, so this is also how you change it.
+`owner_only` stops anyone but you seating the agent somewhere it will then read.
+
 `BUZZ_AGENT_CHANNELS=auto` asks the relay which channels the agent is actually
 in, reading its own signed rosters (kind 39002) rather than trusting a list
 here. Prefer it. A hand-written `'general=<uuid>,ops=<uuid>'` still works, but

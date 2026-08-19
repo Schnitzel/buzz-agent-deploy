@@ -31,6 +31,7 @@ Everything comes from the environment so no secret is ever an argument:
     BUZZ_AGENT_NAME      display name                      (required)
     BUZZ_AGENT_OWNER     owner pubkey hex, for respond_to  (required)
     BUZZ_AGENT_CHANNELS  "name=uuid,name=uuid", or "auto"  (required)
+    BUZZ_AGENT_ADD_POLICY  anyone|owner_only|nobody         (optional)
     BUZZ_AGENT_AUTHTAG   NIP-OA auth tag JSON              (optional)
     BUZZ_AGENT_ABOUT     bio                               (optional)
 """
@@ -95,6 +96,16 @@ def main():
 
     authtag = os.environ.get("BUZZ_AGENT_AUTHTAG", "").strip()
 
+    # Who may add this agent to a channel. "anyone" matches the relay's own
+    # column default and keeps teammates able to pull the agent into their
+    # channels; "owner_only" stops anyone but you seating it somewhere it will
+    # then read. Republished every time, so this is also how you change it.
+    add_policy = os.environ.get("BUZZ_AGENT_ADD_POLICY", "anyone").strip() or "anyone"
+    if add_policy not in ("anyone", "owner_only", "nobody"):
+        print(f"BUZZ_AGENT_ADD_POLICY must be anyone, owner_only or nobody "
+              f"(got {add_policy!r})", file=sys.stderr)
+        return 2
+
     names, ids = [], []
     if channels_raw.strip().lower() == "auto":
         try:
@@ -146,6 +157,13 @@ def main():
         # are then exactly the people whose autocomplete offers it.
         "respond_to": "allowlist",
         "respond_to_allowlist": [owner],
+        # REQUIRED by the relay even though the entry is otherwise free-form.
+        # handle_agent_profile() reads this field to set users.channel_add_policy
+        # and errors without it — "Side effect failed: kind:10100 missing
+        # channel_add_policy field". The relay logs that and still answers the
+        # publisher `accepted: true`, so omitting it looks like a clean publish
+        # and quietly leaves the policy at whatever it already was.
+        "channel_add_policy": add_policy,
     }
 
     events = [

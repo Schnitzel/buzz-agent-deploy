@@ -122,6 +122,14 @@ that person on their own machine — the relay rejects any event whose author is
 not the connection submitting it (`ingest.rs`: "event pubkey does not match
 authenticated identity"), so there is no way to do it for them.
 
+**Before step 1, ask the operator the two questions in
+[Decide who can reach it](#decide-who-can-reach-it--ask-do-not-assume)** — who
+may mention the agent, and what should wake it in a DM. Both answers set values
+in `.env` *and* in the published entry, so deciding them up front costs one
+question and deciding them by default costs a debugging session. Do not assume
+owner-only just because it is the safe default; an agent nobody else can reach
+is often not the agent they asked for.
+
 ### 1. Mint the agent an identity and give it relay access
 
 Every agent needs its own keypair. Never reuse a person's key or another
@@ -348,6 +356,83 @@ will be a member nobody can mention. Nothing republishes the entry on its own:
 channel set changes, but does not write kind 10100 (that is #6097). With
 `BUZZ_AGENT_CHANNELS=auto` the re-run needs no other edit.
 
+## Decide who can reach it — ask, do not assume
+
+There are two independent questions here and the defaults answer neither of them
+well. **Ask the operator both before publishing anything.** Each answer sets two
+places at once, and getting them out of step is the most common silent failure in
+this document.
+
+### Question 1 — who may mention it in a channel?
+
+> *"Should only you be able to mention this agent, specific named people, or
+> anyone who is in a channel with it?"*
+
+| Their answer | 10100 `respond_to` | 10100 allowlist | `BUZZ_ACP_RESPOND_TO` | harness allowlist |
+|---|---|---|---|---|
+| **Only me** (default) | `allowlist` | owner | `allowlist` | owner |
+| **These specific people** | `allowlist` | owner + theirs | `allowlist` | owner + theirs |
+| **Anyone in its channels** | `anyone` | — | `anyone` | — |
+
+Set the published half with `BUZZ_AGENT_RESPOND_TO` / `BUZZ_AGENT_ALLOWLIST` and
+the harness half in `.env`. Both columns must agree — see the two-list section.
+
+Note the last row is **channel-scoped, not relay-wide**: the client also requires
+the viewer to share one of the agent's channels, so "anyone" means anyone who is
+already in a room with it. That makes channel membership the boundary, which is
+usually what people mean, and it removes the need to collect anyone's pubkey.
+
+Publishing `owner-only` in the entry is not an option — the client tests for
+exactly `allowlist` or `anyone`, so anything else hides the agent from everyone
+including the owner. "Only me" is expressed as an allowlist of one.
+
+### Question 2 — what should wake it in a DM?
+
+> *"In a DM, should it answer every message, or only when you @mention it?"*
+
+**Authorisation is not a choice here.** `author_allowed()` short-circuits on
+`is_dm` and returns `is_owner_or_sibling` for every mode except `nobody`, so no
+setting lets a non-owner DM the agent — not even `anyone`, and not by adding
+someone to an allowlist. The only DM-adjacent value is `nobody`, which turns the
+agent off entirely rather than just its DMs. Siblings — other agents with the
+same owner — are admitted alongside the owner.
+
+What *is* configurable is which events wake it, and the default is wrong for DMs:
+
+| Their answer | `BUZZ_ACP_SUBSCRIBE` | What happens |
+|---|---|---|
+| Only on @mention (default) | `mentions` | `require_mention` is set on **every** channel *including DMs*, so a plain DM never reaches the container at all — it reads as "the agent ignores my DMs" |
+| **Every DM, @mentions in channels** | `config` + rules file | the only combination that expresses this |
+| Everything, everywhere | `all` | it also chimes into every channel message uninvited |
+
+Almost everyone wants the middle row, and it is the one that needs a file:
+
+```toml
+# buzz-acp.toml — first match wins at dispatch, merged per channel for the
+# relay-side filter.
+[[rules]]
+name = "dms"
+channels = ["<dm-channel-uuid>", "..."]   # UUIDs only; there is no "type = dm"
+require_mention = false
+prompt_tag = "dm"
+
+[[rules]]
+name = "mentions"
+channels = "all"
+require_mention = true
+prompt_tag = "@mention"
+```
+
+```bash
+BUZZ_ACP_SUBSCRIBE=config
+BUZZ_ACP_CONFIG=/etc/buzz-agent/buzz-acp.toml
+```
+
+⚠ Channel scope is **UUIDs only** — there is no matcher for "is a DM". So a new
+DM channel, opened the first time someone DMs the agent, is covered only by the
+catch-all `mentions` rule until you add its UUID and redeploy. Its first DM will
+be ignored unless it carries an @mention.
+
 ## Letting someone else mention it — two lists, and both must change
 
 By default only the owner can. Widening that means updating **two** lists, and
@@ -378,9 +463,31 @@ are on both lists.
 Update the published entry alone and it is the mirror image: they can see and
 mention it, and the harness discards every message they send.
 
-`respond_to: "anyone"` sidesteps the list entirely — and makes the agent
-visible and promptable to everyone on the relay. On a shared relay, with
-`permission_mode=bypassPermissions`, be sure that is what you want.
+### Or drop the lists: `anyone`, which is channel-scoped
+
+If you want everyone in a channel to be able to mention the agent without
+collecting anyone's pubkey, set both gates to `anyone` —
+`BUZZ_AGENT_RESPOND_TO=anyone` when publishing, `BUZZ_ACP_RESPOND_TO=anyone` in
+the env — and leave the allowlists empty.
+
+This is **not** relay-wide, in either half:
+
+- The client still requires the viewer to share a channel with the agent:
+  `relayAgentIsSharedWithUser` falls through to
+  `channelIds.some(id => sharedChannelIds.has(id))`. Someone on the relay who is
+  in none of its channels never sees it.
+- **DMs stay owner-only.** `author_allowed` short-circuits on `is_dm` and
+  returns `is_owner_or_sibling` for every mode except `Nobody`, so `anyone` does
+  not open DMs to anybody — only the owner and sibling agents with the same
+  owner can DM it. The resolution fails *closed* to DM if the channel type
+  cannot be determined.
+
+So the boundary becomes **channel membership** rather than a pubkey list, which
+is usually what you actually wanted. Judge it by the channel: in a private
+channel you control, `anyone` is the right default and saves the two-list
+problem entirely. In an open channel, it hands everyone who joins the ability to
+make an agent act, and the harness runs `permission_mode=bypassPermissions` —
+so scope that by what the agent can reach, not by who can talk to it.
 
 ## The activity tab, and the two gates behind it
 
@@ -480,7 +587,8 @@ costs an hour every time.
 | WebSocket 404 | Host header — see step 3 |
 | `discovered 0 channel(s) — agent will sit idle` | Relay member but not a channel member |
 | `restricted: channel is private` | Only an existing member can add it |
-| Answers channels, ignores DMs | `BUZZ_ACP_AGENT_OWNER` unset |
+| Answers channels, ignores DMs | `BUZZ_ACP_AGENT_OWNER` unset — **or** `BUZZ_ACP_SUBSCRIBE=mentions`, which requires an @mention in DMs too |
+| A teammate's DMs are ignored, their @mentions work | Correct and not configurable: DMs are owner-or-sibling in every mode |
 | Not in `@` autocomplete | Missing kind 10100 with `channel_ids`, or not seated `role=bot` |
 | One person cannot mention it, everyone else can | Usually their client, not your config — see below |
 | A teammate cannot mention it, and never could | They are on the harness gate but not in the published `respond_to_allowlist` |

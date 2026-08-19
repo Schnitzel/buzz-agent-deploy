@@ -33,6 +33,7 @@ Everything comes from the environment so no secret is ever an argument:
     BUZZ_AGENT_CHANNELS  "name=uuid,name=uuid", or "auto"  (required)
     BUZZ_AGENT_ADD_POLICY  anyone|owner_only|nobody         (optional)
     BUZZ_AGENT_ALLOWLIST comma-separated hex pubkeys        (optional)
+    BUZZ_AGENT_RESPOND_TO  allowlist|anyone                  (optional)
     BUZZ_AGENT_AUTHTAG   NIP-OA auth tag JSON              (optional)
     BUZZ_AGENT_ABOUT     bio                               (optional)
 """
@@ -96,6 +97,19 @@ def main():
         return 2
 
     authtag = os.environ.get("BUZZ_AGENT_AUTHTAG", "").strip()
+
+    # "allowlist" names who may mention it; "anyone" drops the list and lets
+    # every member of a channel the agent is in mention it, with no pubkeys to
+    # collect. That is channel-scoped, not relay-wide: the client also requires
+    # the viewer to share one of the agent's channels. Only these two values are
+    # meaningful here — the client tests for exactly them, so publishing
+    # anything else (including "owner-only") hides the agent from everyone,
+    # owner included.
+    respond_to = os.environ.get("BUZZ_AGENT_RESPOND_TO", "allowlist").strip() or "allowlist"
+    if respond_to not in ("allowlist", "anyone"):
+        print(f"BUZZ_AGENT_RESPOND_TO must be allowlist or anyone (got {respond_to!r}); "
+              "any other value publishes an entry nobody can see", file=sys.stderr)
+        return 2
 
     # ⚠ This list is checked against the pubkey of the person TYPING, not the
     # agent's owner. Buzz Desktop hides the agent from anyone absent from it
@@ -173,7 +187,7 @@ def main():
         "status": "online",
         # Mirror the harness's own author gate: the people who may prompt it
         # are then exactly the people whose autocomplete offers it.
-        "respond_to": "allowlist",
+        "respond_to": respond_to,
         "respond_to_allowlist": allowlist,
         # REQUIRED by the relay even though the entry is otherwise free-form.
         # handle_agent_profile() reads this field to set users.channel_add_policy

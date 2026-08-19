@@ -90,7 +90,9 @@ bridge wants an `x-auth-tag` header. Easy to misread as a broken key.
 **Kind 0 and 10100 are replaceable, so partial writes destroy state.**
 `buzz channels set-add-policy` publishes a 10100 containing only
 `{"channel_add_policy": ...}` — wiping the directory entry and silently
-un-mentioning the agent. Republish the full profile on every deploy.
+un-mentioning the agent. Republish the full profile on every deploy, and after
+any channel membership change — `BUZZ_AGENT_CHANNELS=auto` derives the channel
+list from the relay so the re-run needs no other edit.
 
 **Retire with NIP-IA, do not delete.** Archive the identity *before* destroying
 its key — afterwards nothing can sign as it. Archiving hides it from pickers and
@@ -159,7 +161,7 @@ docker compose up -d
 
 # 4. publish the agent's own profile
 BUZZ_AGENT_SECKEY=... BUZZ_RELAY=... BUZZ_AGENT_NAME=my-agent \
-BUZZ_AGENT_OWNER=... BUZZ_AGENT_CHANNELS='general=<uuid>' \
+BUZZ_AGENT_OWNER=... BUZZ_AGENT_CHANNELS=auto \
 BUZZ_AGENT_AUTHTAG='["auth",...]' python3 scripts/agent-profile.py
 ```
 

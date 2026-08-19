@@ -312,3 +312,35 @@ def selftest():
 
 if __name__ == "__main__":
     sys.exit(selftest() if "--selftest" in sys.argv else selftest())
+
+
+def query(sk, filters, relay_url, auth_tag=None, timeout=25):
+    """Read events from the relay's HTTP bridge, authenticated as `sk`.
+
+    Nostr filters, NIP-98 (kind 27235) HTTP auth. Returns a list of events.
+
+    `auth_tag` is the NIP-OA attestation JSON. A virtual member has no
+    relay_members row of its own and is admitted only through its owner, so
+    without the tag the bridge answers 403 relay_membership_required — the
+    same trap as the CLI. Harmless to pass for an enrolled agent.
+    """
+    url = relay_url.rstrip("/") + "/query"
+    body = json.dumps(filters).encode()
+    auth = build_event(
+        sk,
+        27235,
+        [["u", url],
+         ["method", "POST"],
+         ["payload", hashlib.sha256(body).hexdigest()]],
+        "",
+    )
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Nostr " + b64encode(
+            json.dumps(auth, separators=(",", ":")).encode()).decode(),
+    }
+    if auth_tag:
+        headers["x-auth-tag"] = auth_tag
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+    payload = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+    return payload if isinstance(payload, list) else payload.get("events", [])

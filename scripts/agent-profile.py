@@ -30,7 +30,7 @@ Everything comes from the environment so no secret is ever an argument:
     BUZZ_RELAY           relay base URL                    (required)
     BUZZ_AGENT_NAME      display name                      (required)
     BUZZ_AGENT_OWNER     owner pubkey hex, for respond_to  (required)
-    BUZZ_AGENT_CHANNELS  "name=uuid,name=uuid"             (required)
+    BUZZ_AGENT_CHANNELS  "name=uuid,name=uuid", or "auto"  (required)
     BUZZ_AGENT_AUTHTAG   NIP-OA auth tag JSON              (optional)
     BUZZ_AGENT_ABOUT     bio                               (optional)
 """
@@ -41,10 +41,45 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from nostr import build_event, publish, to_hex_seckey  # noqa: E402
+from nostr import build_event, publish, query, to_hex_seckey  # noqa: E402
+from nostr import pubkey_xonly  # noqa: E402
 
 KIND_PROFILE = 0
 KIND_AGENT_DIRECTORY = 10100
+
+
+def discover_channels(sk, relay, auth_tag):
+    """Ask the relay which channels the agent is actually in.
+
+    Reads the relay's own signed rosters (kind 39002, `d` = channel id, one `p`
+    per member) filtered to this agent, then kind 39000 for display names.
+
+    Why this beats a hand-written list: `channel_ids` is checked against the
+    channel being typed in, so the moment someone adds the agent to a channel
+    that is not in the list, the agent is a member nobody can mention there —
+    with no error on either side. A list maintained by hand is stale from the
+    first time anyone touches channel membership without redeploying. The relay
+    cannot drift from itself.
+    """
+    me = pubkey_xonly(sk).hex()
+
+    def tagmap(ev):
+        return {t[0]: t[1] for t in ev.get("tags", []) if len(t) >= 2}
+
+    ids, seen = [], set()
+    for ev in query(sk, [{"kinds": [39002], "#p": [me]}], relay, auth_tag):
+        cid = tagmap(ev).get("d")
+        if cid and cid not in seen:
+            seen.add(cid)
+            ids.append(cid)
+
+    names = {}
+    for ev in query(sk, [{"kinds": [39000]}], relay, auth_tag):
+        tm = tagmap(ev)
+        if "d" in tm:
+            names[tm["d"]] = tm.get("name", "channel")
+
+    return [(names.get(i, "channel"), i) for i in ids]
 
 
 def main():
@@ -58,19 +93,35 @@ def main():
         print(f"missing required environment variable: {e}", file=sys.stderr)
         return 2
 
+    authtag = os.environ.get("BUZZ_AGENT_AUTHTAG", "").strip()
+
     names, ids = [], []
-    for pair in channels_raw.split(","):
-        if not pair.strip():
-            continue
-        n, _, cid = pair.partition("=")
-        names.append(n.strip())
-        ids.append(cid.strip())
+    if channels_raw.strip().lower() == "auto":
+        try:
+            pairs = discover_channels(sk, relay, authtag or None)
+        except Exception as e:
+            print(f"channel discovery failed: {e}\n"
+                  "Refusing to publish: a directory entry built from a partial "
+                  "channel list would silently un-mention the agent in every "
+                  "channel it omits.", file=sys.stderr)
+            return 1
+        names = [n for n, _ in pairs]
+        ids = [i for _, i in pairs]
+    else:
+        for pair in channels_raw.split(","):
+            if not pair.strip():
+                continue
+            n, _, cid = pair.partition("=")
+            names.append(n.strip())
+            ids.append(cid.strip())
     if not ids:
-        print("BUZZ_AGENT_CHANNELS listed no channels — the agent will not be "
-              "mentionable anywhere", file=sys.stderr)
+        where = ("the relay reports the agent in no channels"
+                 if channels_raw.strip().lower() == "auto"
+                 else "BUZZ_AGENT_CHANNELS listed no channels")
+        print(f"{where} — the agent will not be mentionable anywhere",
+              file=sys.stderr)
 
     tags = []
-    authtag = os.environ.get("BUZZ_AGENT_AUTHTAG", "").strip()
     if authtag:
         tags.append(json.loads(authtag))
     else:

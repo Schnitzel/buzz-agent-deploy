@@ -12,7 +12,8 @@ description: >-
   fail — the agent ignores DMs but answers in channels, never appears in @
   autocomplete or the Agents panel, shows no "managed by" badge, has a
   permanently empty ACP activity tab, sits idle reporting "discovered 0
-  channel(s)", or 404s on the relay WebSocket. Reach
+  channel(s)", 404s on the relay WebSocket, or can be @-mentioned by some
+  people but not others. Reach
   for it even if the user only describes the symptom and never says "buzz
   agent".
 ---
@@ -271,18 +272,26 @@ docker exec -e BUZZ_RELAY_URL=https://buzz.example.org <agent> buzz channels joi
 ```
 
 A private channel returns `restricted: channel is private` — an existing member
-must add it. Either way, put the channel in `BUZZ_AGENT_CHANNELS` and re-run
-`agent-profile.py`, or it joins silently and nobody can mention it.
+must add it. Either way the directory entry must be republished afterwards, or
+it joins silently and nobody can mention it there.
 
 Then, as the **agent**, publish its profile:
 
 ```bash
 BUZZ_AGENT_SECKEY=... BUZZ_RELAY=https://buzz.example.org \
 BUZZ_AGENT_NAME=my-agent BUZZ_AGENT_OWNER=<owner-hex> \
-BUZZ_AGENT_CHANNELS='general=<uuid>,ops=<uuid>' \
+BUZZ_AGENT_CHANNELS=auto \
 BUZZ_AGENT_AUTHTAG='["auth",...]' \
 python3 scripts/agent-profile.py
 ```
+
+`BUZZ_AGENT_CHANNELS=auto` asks the relay which channels the agent is actually
+in, reading its own signed rosters (kind 39002) rather than trusting a list
+here. Prefer it. A hand-written `'general=<uuid>,ops=<uuid>'` still works, but
+it is stale the moment anyone adds the agent to a channel without redeploying,
+and the only symptom is that nobody can mention it there. If discovery fails,
+the script refuses to publish rather than shipping a partial entry that would
+un-mention the agent everywhere it omits.
 
 Run that on **every deploy**. Kind 10100 is replaceable, and
 `buzz channels set-add-policy` publishes a 10100 containing only
@@ -325,8 +334,11 @@ The CLI's `buzz channels add-member --role` is broken upstream — it builds the
 event without the required `p` tag and fails `invalid: missing p tag`. Use
 `owner-setup.py`.
 
-**Add every new channel to `BUZZ_AGENT_CHANNELS` and re-run `agent-profile.py`,**
-or the agent will be a member nobody can mention.
+**Re-run `agent-profile.py` after any channel membership change,** or the agent
+will be a member nobody can mention. Nothing republishes the entry on its own:
+`buzz-acp` subscribes to membership notifications and knows the instant its
+channel set changes, but does not write kind 10100 (that is #6097). With
+`BUZZ_AGENT_CHANNELS=auto` the re-run needs no other edit.
 
 ## The activity tab, and the two gates behind it
 
@@ -428,6 +440,7 @@ costs an hour every time.
 | `restricted: channel is private` | Only an existing member can add it |
 | Answers channels, ignores DMs | `BUZZ_ACP_AGENT_OWNER` unset |
 | Not in `@` autocomplete | Missing kind 10100 with `channel_ids`, or not seated `role=bot` |
+| One person cannot mention it, everyone else can | Usually their client, not your config — see below |
 | Not in the Agents panel | Missing kind 30177 |
 | No "managed by" badge | Missing NIP-OA `auth` tag, or a kind 0 published without it |
 | ACP activity tab empty | `BUZZ_ACP_RELAY_OBSERVER` unset — or set, and the relay has no owner recorded for the agent |
@@ -438,6 +451,48 @@ costs an hour every time.
 | `opencode run` auto-rejects a `buzz` post | `opencode.json` "ask" gate; the harness bypasses it, `opencode run` does not |
 | `__cxa_guard_acquire: symbol not found` | Alpine lacks `libstdc++`/`libgcc` |
 | Ansible: `DEFAULT_LOCAL_TMP: Permission denied` | Root-owned `/home/agent` dotfiles |
+
+### When only one person cannot mention it
+
+This one is worth its own entry because it is indistinguishable from a
+misconfiguration and will send you through the relay looking for a per-user
+gate that does not exist.
+
+Buzz Desktop builds its mentionable set as **managed agents ∪ relay agents**,
+and humans come from channel members — three independent paths. So ask the
+person one question: **can they still `@` a human, and a locally managed
+agent?** If both work and only the server-side agent does not, their relay-agent
+half is empty and nothing on your side is wrong. Kind 10100 has no event-driven
+refresh in the desktop — a poll is the only path that repopulates it — so the
+list can go blank and stay blank. Restarting Buzz Desktop rebuilds it.
+
+The tell in the relay's own data is exact: their message arrives with **no `p`
+tag at all**, while the same person's earlier messages carry the agent's pubkey.
+They typed the mention, their client did not offer the agent, and it went out as
+plain text that routes nowhere. Neither side shows an error.
+
+```sql
+-- did their client actually tag anything? (relay Postgres)
+SELECT created_at,
+       (SELECT string_agg(left(t->>1,8), ',') FROM jsonb_array_elements(tags) t
+         WHERE t->>0 = 'p') AS p_tags,
+       left(content, 50)
+FROM events WHERE kind = 9 AND encode(pubkey,'hex') = '<their pubkey>'
+  AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 10;
+```
+
+An empty `p_tags` on a message that visibly starts with `@agent` is the whole
+diagnosis. Before concluding it is their client, confirm the entry really does
+list the channel and their pubkey — those are yours to get wrong:
+
+```sql
+SELECT content FROM events WHERE kind = 10100
+  AND encode(pubkey,'hex') = '<agent pubkey>' AND deleted_at IS NULL;
+```
+
+⚠ When querying membership directly, filter `removed_at IS NULL`. A removed
+member still has its row, so an unfiltered `channel_members` query reports
+people and agents as present who were removed hours ago.
 
 More depth, including the exact upstream source references behind each of these:
 `references/internals.md`. For running native (systemd, shared opencode, build

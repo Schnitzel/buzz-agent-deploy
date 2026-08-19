@@ -397,15 +397,29 @@ someone to an allowlist. The only DM-adjacent value is `nobody`, which turns the
 agent off entirely rather than just its DMs. Siblings — other agents with the
 same owner — are admitted alongside the owner.
 
-What *is* configurable is which events wake it, and the default is wrong for DMs:
+What *is* configurable is which events wake it:
 
 | Their answer | `BUZZ_ACP_SUBSCRIBE` | What happens |
 |---|---|---|
-| Only on @mention (default) | `mentions` | `require_mention` is set on **every** channel *including DMs*, so a plain DM never reaches the container at all — it reads as "the agent ignores my DMs" |
-| **Every DM, @mentions in channels** | `config` + rules file | the only combination that expresses this |
+| @mentions in channels (default) | `mentions` | `require_mention` on every channel. **DMs still work** — see below |
 | Everything, everywhere | `all` | it also chimes into every channel message uninvited |
+| Per-channel control | `config` + rules file | the only way to mix the two |
 
-Almost everyone wants the middle row, and it is the one that needs a file:
+**`mentions` does not break DMs, despite what you might expect** — and this
+document said otherwise until it was tested against a live relay.
+`require_mention` is a **`p`-tag check, not a text check**: `filter.rs` requires
+"a `p` tag matching `agent_pubkey_hex`", and Buzz Desktop's DM composer p-tags
+the other participant on every message. So a plain DM with no `@` in it carries
+the tag anyway and is delivered. Verified: `hello, are you there?` sent to an
+agent on default `mentions` was dispatched and answered.
+
+The caveat is that this is a **client convention, not a protocol guarantee**. A
+client that does not p-tag the recipient would be filtered out, and then a rules
+file is the fix. Test it rather than assuming, in either direction.
+
+So reach for `config` when you want something `mentions` and `all` genuinely
+cannot express — most often "answer everything in this one channel, @mentions
+everywhere else":
 
 ```toml
 # buzz-acp.toml — first match wins at dispatch, merged per channel for the
@@ -615,7 +629,7 @@ costs an hour every time.
 | WebSocket 404 | Host header — see step 3 |
 | `discovered 0 channel(s) — agent will sit idle` | Relay member but not a channel member |
 | `restricted: channel is private` | Only an existing member can add it |
-| Answers channels, ignores DMs | `BUZZ_ACP_AGENT_OWNER` unset — **or** `BUZZ_ACP_SUBSCRIBE=mentions`, which requires an @mention in DMs too |
+| Answers channels, ignores DMs | `BUZZ_ACP_AGENT_OWNER` unset. *Not* the subscribe mode — `mentions` delivers DMs fine, because the client p-tags the recipient |
 | A teammate's DMs are ignored, their @mentions work | Correct and not configurable: DMs are owner-or-sibling in every mode. Give them a private channel instead — see above |
 | Not in `@` autocomplete | Missing kind 10100 with `channel_ids`, or not seated `role=bot` |
 | One person cannot mention it, everyone else can | Usually their client, not your config — see below |

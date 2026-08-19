@@ -14,6 +14,28 @@ it, and **every one of those things fails silently**.
 This repo is the missing half: a checklist, the Docker pieces, and small
 dependency-free scripts for the parts that need a Nostr signature.
 
+## ⚠ Desktop v0.5.17+ limits server agents to their owner
+
+On packaged Buzz Desktop releases from **v0.5.17** (2026-08-18), a server-side
+agent is mentionable **only by its NIP-OA owner** — regardless of the
+`respond_to` / `respond_to_allowlist` policy its owner published. The relay
+serves that policy correctly; the client discards it. The gate is compiled into
+release builds (`BUZZ_DESKTOP_BUILD_AGENT_ACCESS_OWNER_ONLY`, block/buzz#4053)
+and evaluated per viewer, so an operator cannot lift it centrally.
+
+It fails silently: no autocomplete entry, no error, and a hand-typed `@agent`
+carries no `p` tag, so it routes nowhere.
+
+**If several people need to mention one agent, use Desktop v0.5.14**
+(2026-08-15) or an OSS build. Reported as
+[block/buzz#6329](https://github.com/block/buzz/issues/6329); proposed fix in
+[block/buzz#6333](https://github.com/block/buzz/pull/6333), which lets the relay
+advertise the policy so operators settle it server-side with nothing for users
+to configure.
+
+Everything else in this repo is unaffected — the relay-side configuration is
+correct and will start working the moment a client honours it.
+
 ## Why this exists
 
 An agent created inside Buzz Desktop gets five things done for it invisibly. One

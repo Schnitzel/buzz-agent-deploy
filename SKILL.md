@@ -28,6 +28,54 @@ exporting `BUZZ_PRIVATE_KEY` and `BUZZ_RELAY_URL` and exec'ing the harness "is a
 conforming launcher at this layer — today, with no code change." A compose
 service is a supported deployment, not a workaround.
 
+## ⚠ Read this before promising anyone a shared agent
+
+**On packaged Buzz Desktop releases from v0.5.17 (2026-08-18) onward, a
+server-side agent can be mentioned only by its own owner.** Not by an
+allowlist, not by `respond_to: "anyone"`. Everything this document says about
+choosing who may mention an agent is real and correct at the relay — and
+discarded by the client.
+
+The gate is `BUZZ_DESKTOP_BUILD_AGENT_ACCESS_OWNER_ONLY`, compiled into release
+builds (block/buzz#4053). For an agent Desktop *runs* it clamps access at spawn;
+for a relay agent, which Desktop does not run, it simply hides it from everyone
+but the NIP-OA owner:
+
+```js
+if (!ownerOnly || isManagedAgent) return "allow";
+return normalizePubkey(ownerPubkey) === normalizePubkey(currentPubkey)
+  ? "allow" : "deny";
+```
+
+Three consequences worth knowing before you build anything:
+
+- **It is the app, not the relay.** The flag appears only under `desktop/`.
+  Your relay serves the entry correctly to every member — verify it if you like,
+  a plain member with no auth tag receives the full agent directory — and the
+  client throws it away.
+- **It is evaluated per viewer.** So the operator cannot fix it centrally. An
+  OSS build helps only the person running it; every teammate would need one.
+- **It is silent.** No autocomplete entry, no error. A hand-typed `@agent`
+  goes out with **no `p` tag**, so it routes nowhere and the agent never sees it.
+  The agent's profile card shows an empty channel list, which reads as
+  misconfiguration.
+
+**Use Buzz Desktop v0.5.14** (2026-08-15, the release before this) if you need
+several people to mention a server agent today. Release timing is unambiguous:
+v0.5.17 shipped at 17:23 UTC on 2026-08-18, and a teammate on a
+correctly-configured agent lost the ability to mention it at 19:44 UTC the same
+day, mid-conversation, when their client auto-updated.
+
+Reported as [block/buzz#6329][i6329], with a proposed fix in
+[block/buzz#6333][pr6333] that lets a relay advertise
+`agent-access-published-policy` in NIP-11 so the operator can settle it once,
+server-side, with nothing for users to install or configure. Until one of those
+lands, treat single-owner as the ceiling for a server agent and size the
+deployment accordingly.
+
+[i6329]: https://github.com/block/buzz/issues/6329
+[pr6333]: https://github.com/block/buzz/pull/6333
+
 ## What a proper agent consists of
 
 Follow the NIPs in `docs/nips/`, not `examples/countdown-bot`. That example is
@@ -391,6 +439,13 @@ this document.
 > *"Should only you be able to mention this agent, specific named people, or
 > anyone who is in a channel with it?"*
 
+⚠ On packaged Desktop **v0.5.17+** only the first row is reachable for a server
+agent — see [the ceiling above](#-read-this-before-promising-anyone-a-shared-agent).
+Ask anyway, and configure what they asked for: the relay honours it, so the
+deployment is correct the moment a client can. But say plainly that rows two and
+three need v0.5.14, an OSS build, or [#6333][pr6333] before anyone else sees the
+agent. Promising a shared agent that the app will hide is worse than saying no.
+
 | Their answer | 10100 `respond_to` | 10100 allowlist | `BUZZ_ACP_RESPOND_TO` | harness allowlist |
 |---|---|---|---|---|
 | **Only me** (default) | `allowlist` | owner | `allowlist` | owner |
@@ -655,7 +710,8 @@ costs an hour every time.
 | Answers channels, ignores DMs | `BUZZ_ACP_AGENT_OWNER` unset. *Not* the subscribe mode — `mentions` delivers DMs fine, because the client p-tags the recipient |
 | A teammate's DMs are ignored, their @mentions work | Correct and not configurable: DMs are owner-or-sibling in every mode. Give them a private channel instead — see above |
 | Not in `@` autocomplete | Missing kind 10100 with `channel_ids`, or not seated `role=bot` |
-| One person cannot mention it, everyone else can | Usually their client, not your config — see below |
+| Nobody but the owner can mention it | Packaged Desktop v0.5.17+ owner-only build policy — not fixable from your side |
+| One person cannot mention it, everyone else can | Check their Desktop version first; otherwise their client, not your config — see below |
 | Absent from `@` autocomplete **in a DM**, fine in channels | By design, and not fixable from your side — see below |
 | A teammate cannot mention it, and never could | They are on the harness gate but not in the published `respond_to_allowlist` |
 | Not in the Agents panel | Missing kind 30177 |
@@ -699,13 +755,20 @@ This one is worth its own entry because it is indistinguishable from a
 misconfiguration and will send you through the relay looking for a per-user
 gate that does not exist.
 
-Buzz Desktop builds its mentionable set as **managed agents ∪ relay agents**,
-and humans come from channel members — three independent paths. So ask the
-person one question: **can they still `@` a human, and a locally managed
-agent?** If both work and only the server-side agent does not, their relay-agent
-half is empty and nothing on your side is wrong. Kind 10100 has no event-driven
-refresh in the desktop — a poll is the only path that repopulates it — so the
-list can go blank and stay blank. Restarting Buzz Desktop rebuilds it.
+**Check their Desktop version first.** On packaged **v0.5.17+** this is the
+owner-only build policy, not a fault: a server agent is mentionable only by its
+NIP-OA owner, so everyone else sees exactly this. Restarting, clearing the cache
+and republishing all change nothing — the decision is compiled in. See
+[the ceiling above](#-read-this-before-promising-anyone-a-shared-agent).
+
+Only if they are on **v0.5.14 or an OSS build** is the rest of this section the
+likely cause. Buzz Desktop builds its mentionable set as **managed agents ∪
+relay agents**, with humans on a third path from channel members. So ask one
+question: **can they still `@` a human, and a locally managed agent?** If both
+work and only the server-side agent does not, their relay-agent half is empty
+and nothing on your side is wrong. Kind 10100 has no event-driven refresh in the
+desktop — a poll is the only path that repopulates it — so the list can go blank
+and stay blank. Restarting Buzz Desktop rebuilds it.
 
 The tell in the relay's own data is exact: their message arrives with **no `p`
 tag at all**, while the same person's earlier messages carry the agent's pubkey.

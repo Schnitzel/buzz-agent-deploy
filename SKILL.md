@@ -633,6 +633,7 @@ costs an hour every time.
 | A teammate's DMs are ignored, their @mentions work | Correct and not configurable: DMs are owner-or-sibling in every mode. Give them a private channel instead — see above |
 | Not in `@` autocomplete | Missing kind 10100 with `channel_ids`, or not seated `role=bot` |
 | One person cannot mention it, everyone else can | Usually their client, not your config — see below |
+| Absent from `@` autocomplete **in a DM**, fine in channels | By design, and not fixable from your side — see below |
 | A teammate cannot mention it, and never could | They are on the harness gate but not in the published `respond_to_allowlist` |
 | Not in the Agents panel | Missing kind 30177 |
 | No "managed by" badge | Missing NIP-OA `auth` tag, or a kind 0 published without it |
@@ -644,6 +645,29 @@ costs an hour every time.
 | `opencode run` auto-rejects a `buzz` post | `opencode.json` "ask" gate; the harness bypasses it, `opencode run` does not |
 | `__cxa_guard_acquire: symbol not found` | Alpine lacks `libstdc++`/`libgcc` |
 | Ansible: `DEFAULT_LOCAL_TMP: Permission denied` | Root-owned `/home/agent` dotfiles |
+
+### Missing from `@` autocomplete in a DM
+
+Expected, and no amount of republishing changes it. `useMentions` only treats a
+channel as mentionable when `isAgentMentionChannelType` says so:
+
+```js
+return type === "stream" || type === "forum";
+```
+
+A DM is `"dm"`, so the scope falls back to `{ type: "managed-only" }`, and
+`getMentionableAgentPubkeys` returns `false` for every relay agent under that
+scope regardless of `channel_ids`, `respond_to` or the allowlist.
+
+**It does not matter.** A DM has one other participant, so there is nothing to
+disambiguate, and the message reaches the agent anyway — the client p-tags the
+recipient, which is the same mechanism that makes plain DMs work under
+`mentions` mode. Type nothing special and it will answer.
+
+Worth knowing only because the behaviour is inconsistent: an agent the desktop
+*manages locally* still appears in DM autocomplete, because `managed-only`
+admits it. So the same UI offers a laptop-run agent and hides a server-run one.
+Cosmetic — do not go hunting for a config difference, there isn't one.
 
 ### When only one person cannot mention it
 

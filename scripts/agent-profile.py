@@ -32,6 +32,7 @@ Everything comes from the environment so no secret is ever an argument:
     BUZZ_AGENT_OWNER     owner pubkey hex, for respond_to  (required)
     BUZZ_AGENT_CHANNELS  "name=uuid,name=uuid", or "auto"  (required)
     BUZZ_AGENT_ADD_POLICY  anyone|owner_only|nobody         (optional)
+    BUZZ_AGENT_ALLOWLIST comma-separated hex pubkeys        (optional)
     BUZZ_AGENT_AUTHTAG   NIP-OA auth tag JSON              (optional)
     BUZZ_AGENT_ABOUT     bio                               (optional)
 """
@@ -96,6 +97,23 @@ def main():
 
     authtag = os.environ.get("BUZZ_AGENT_AUTHTAG", "").strip()
 
+    # ⚠ This list is checked against the pubkey of the person TYPING, not the
+    # agent's owner. Buzz Desktop hides the agent from anyone absent from it
+    # (relayAgentIsSharedWithUser), so it MUST mirror the harness's own
+    # BUZZ_ACP_RESPOND_TO_ALLOWLIST. Publish only the owner while the harness
+    # gate admits a teammate and the agent is invisible in their autocomplete
+    # even though it would answer them — they get no error, and a mention they
+    # type by hand goes out with no `p` tag and routes nowhere.
+    allowlist = [k.strip() for k in
+                 os.environ.get("BUZZ_AGENT_ALLOWLIST", "").split(",") if k.strip()]
+    if owner not in allowlist:
+        allowlist.insert(0, owner)
+    bad = [k for k in allowlist if len(k) != 64 or not all(c in "0123456789abcdef" for c in k.lower())]
+    if bad:
+        print(f"BUZZ_AGENT_ALLOWLIST needs 64-char hex pubkeys; bad entries: {bad}",
+              file=sys.stderr)
+        return 2
+
     # Who may add this agent to a channel. "anyone" matches the relay's own
     # column default and keeps teammates able to pull the agent into their
     # channels; "owner_only" stops anyone but you seating it somewhere it will
@@ -156,7 +174,7 @@ def main():
         # Mirror the harness's own author gate: the people who may prompt it
         # are then exactly the people whose autocomplete offers it.
         "respond_to": "allowlist",
-        "respond_to_allowlist": [owner],
+        "respond_to_allowlist": allowlist,
         # REQUIRED by the relay even though the entry is otherwise free-form.
         # handle_agent_profile() reads this field to set users.channel_add_policy
         # and errors without it — "Side effect failed: kind:10100 missing

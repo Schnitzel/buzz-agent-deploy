@@ -348,6 +348,40 @@ will be a member nobody can mention. Nothing republishes the entry on its own:
 channel set changes, but does not write kind 10100 (that is #6097). With
 `BUZZ_AGENT_CHANNELS=auto` the re-run needs no other edit.
 
+## Letting someone else mention it — two lists, and both must change
+
+By default only the owner can. Widening that means updating **two** lists, and
+changing one without the other fails silently in a way that wastes an afternoon.
+
+| List | Where | Decides |
+|---|---|---|
+| `BUZZ_ACP_RESPOND_TO_ALLOWLIST` | the agent's `.env` | whether the harness **answers** them |
+| `respond_to_allowlist` in kind 10100 | the published entry | whether their client **offers** it |
+
+Set `BUZZ_AGENT_ALLOWLIST` to the same comma-separated set when you publish, and
+restart the agent with the matching env:
+
+```bash
+BUZZ_AGENT_ALLOWLIST='<teammate-hex>,<teammate-hex>' ... python3 scripts/agent-profile.py
+```
+
+The owner is always included, so list only the additions.
+
+**Update the harness gate alone and the agent becomes an agent that would
+happily answer someone who cannot see it.** `relayAgentIsSharedWithUser` checks
+the published list against the pubkey of the person *typing*, so the agent is
+absent from their autocomplete. They get no error. A mention they type by hand
+goes out with **no `p` tag** and routes nowhere, so the agent never sees it
+either. From their side it looks broken; from yours it looks fine, because you
+are on both lists.
+
+Update the published entry alone and it is the mirror image: they can see and
+mention it, and the harness discards every message they send.
+
+`respond_to: "anyone"` sidesteps the list entirely — and makes the agent
+visible and promptable to everyone on the relay. On a shared relay, with
+`permission_mode=bypassPermissions`, be sure that is what you want.
+
 ## The activity tab, and the two gates behind it
 
 Buzz Desktop shows a per-agent **ACP activity** tab. For a hand-provisioned
@@ -449,6 +483,7 @@ costs an hour every time.
 | Answers channels, ignores DMs | `BUZZ_ACP_AGENT_OWNER` unset |
 | Not in `@` autocomplete | Missing kind 10100 with `channel_ids`, or not seated `role=bot` |
 | One person cannot mention it, everyone else can | Usually their client, not your config — see below |
+| A teammate cannot mention it, and never could | They are on the harness gate but not in the published `respond_to_allowlist` |
 | Not in the Agents panel | Missing kind 30177 |
 | No "managed by" badge | Missing NIP-OA `auth` tag, or a kind 0 published without it |
 | ACP activity tab empty | `BUZZ_ACP_RELAY_OBSERVER` unset — or set, and the relay has no owner recorded for the agent |

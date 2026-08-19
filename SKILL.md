@@ -270,6 +270,29 @@ credential under NIP-AA.
 `--channel` seats the agent as `role=bot`, which is presentation rather than
 function — do it for channels you want it to look like a bot in.
 
+⚠ **Seat the agent *after* publishing its profile, not before.** The obvious
+order — run this once with `--channel`, then publish the profile — puts the
+kind 9000 membership event on the relay while the agent still has no kind 0, so
+the "added by" line renders as a raw `b226101c…9f59` for everyone in the
+channel. Clicking the agent resolves the name (the client fetches the profile on
+demand) and a refresh fixes the line, but until then a freshly added agent looks
+anonymous to every member.
+
+To avoid it, split this into two runs:
+
+```bash
+# 1. mint the attestation only — no --channel
+python3 scripts/owner-setup.py --relay ... --agent <hex> --name my-agent
+# 2. publish the agent's own profile with the tag from step 1
+BUZZ_AGENT_AUTHTAG='["auth",...]' ... python3 scripts/agent-profile.py
+# 3. NOW seat it, with a name already on the relay
+python3 scripts/owner-setup.py --relay ... --agent <hex> --name my-agent \
+  --channel general=<uuid>
+```
+
+Kind 0 and kind 10100 are replaceable and the attestation signs the agent's key
+rather than an event, so the repeated run is harmless.
+
 **Channel membership is separate, and `buzz-acp` will not do it for you.**
 countdown-bot self-adds from its own code; the harness does not. An open channel
 the agent can join itself:
@@ -636,6 +659,7 @@ costs an hour every time.
 | Absent from `@` autocomplete **in a DM**, fine in channels | By design, and not fixable from your side — see below |
 | A teammate cannot mention it, and never could | They are on the harness gate but not in the published `respond_to_allowlist` |
 | Not in the Agents panel | Missing kind 30177 |
+| Shows as a raw pubkey in the channel, right name when clicked | Seated before its kind 0 existed — publish the profile before `--channel`, see step 5 |
 | No "managed by" badge | Missing NIP-OA `auth` tag, or a kind 0 published without it |
 | ACP activity tab empty | `BUZZ_ACP_RELAY_OBSERVER` unset — or set, and the relay has no owner recorded for the agent |
 | Activity tab empty only for a teammate | Correct: frames are encrypted to the owner alone |

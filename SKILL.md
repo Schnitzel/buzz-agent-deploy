@@ -433,6 +433,34 @@ DM channel, opened the first time someone DMs the agent, is covered only by the
 catch-all `mentions` rule until you add its UUID and redeploy. Its first DM will
 be ignored unless it carries an @mention.
 
+### "So how do I let a teammate DM it?" — you don't, you give them a room
+
+This is the next question everyone asks, and the answer is not a setting. There
+is no flag, env var or rule that admits a non-owner in a DM: `author_allowed` is
+the only gate, nothing bypasses it, and `is_dm_channel` fails *closed* when it
+cannot resolve the channel type. Treat it as deliberate — otherwise any relay
+member could privately drive someone else's agent, running
+`permission_mode=bypassPermissions`, with nothing visible in a shared channel.
+
+What gives you the same experience is a **private channel containing just that
+person and the agent**. The gate keys on `channel_type`, and a private channel
+is `stream`, not `dm` — so `allowlist`/`anyone` apply normally there. Add a rule
+with `require_mention = false` for its UUID and it answers every message without
+an `@`:
+
+```toml
+[[rules]]
+name = "direct-with-<person>"
+channels = ["<that-channel-uuid>"]
+require_mention = false
+prompt_tag = "dm"
+```
+
+`owner-setup.py --create-channel <name>` already produces exactly this shape — a
+private `stream` channel you own, with the agent seated in it. It reads as a DM
+to both of them, the authorisation is yours to set, and unlike a real DM it is
+auditable.
+
 ## Letting someone else mention it — two lists, and both must change
 
 By default only the owner can. Widening that means updating **two** lists, and
@@ -588,7 +616,7 @@ costs an hour every time.
 | `discovered 0 channel(s) — agent will sit idle` | Relay member but not a channel member |
 | `restricted: channel is private` | Only an existing member can add it |
 | Answers channels, ignores DMs | `BUZZ_ACP_AGENT_OWNER` unset — **or** `BUZZ_ACP_SUBSCRIBE=mentions`, which requires an @mention in DMs too |
-| A teammate's DMs are ignored, their @mentions work | Correct and not configurable: DMs are owner-or-sibling in every mode |
+| A teammate's DMs are ignored, their @mentions work | Correct and not configurable: DMs are owner-or-sibling in every mode. Give them a private channel instead — see above |
 | Not in `@` autocomplete | Missing kind 10100 with `channel_ids`, or not seated `role=bot` |
 | One person cannot mention it, everyone else can | Usually their client, not your config — see below |
 | A teammate cannot mention it, and never could | They are on the harness gate but not in the published `respond_to_allowlist` |
